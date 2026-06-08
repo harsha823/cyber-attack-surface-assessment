@@ -55,7 +55,7 @@ No pip installs required — the tool only uses Python's standard library (`sock
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/cyber-attack-surface-assessment
+git clone https://github.com/harsha823/cyber-attack-surface-assessment
 cd cyber-attack-surface-assessment
 ```
 
