@@ -1,16 +1,3 @@
-"""
-host_discovery.py — Checks whether a target host is alive before scanning.
-
-A quick ping check with retry logic. No point running a full port scan
-against a host that's offline or unreachable.
-
-Usage:
-    from scanner.host_discovery import HostDiscovery
-
-    hd = HostDiscovery(target="192.168.56.101")
-    result = hd.ping()
-    hd.display_result(result)
-"""
 
 import subprocess
 import platform
