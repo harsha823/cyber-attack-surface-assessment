@@ -57,8 +57,8 @@ No pip installs required — the tool only uses Python's standard library (`sock
 ```bash
 git clone https://github.com/harsha823/cyber-attack-surface-assessment
 cd cyber-attack-surface-assessment
+pip install -r requirements.txt
 ```
-
 That's it. No virtual environment or package installation needed.
 
 Make sure Nmap is installed:
