@@ -5,15 +5,7 @@ import os
 import concurrent.futures
 from datetime import datetime
 from typing import Dict, List, Optional
-
-GREEN   = "\033[92m"
-RED     = "\033[91m"
-YELLOW  = "\033[93m"
-CYAN    = "\033[96m"
-BLUE    = "\033[94m"
-MAGENTA = "\033[95m"
-BOLD    = "\033[1m"
-RESET   = "\033[0m"
+from utils.colors import GREEN, RED, YELLOW, CYAN, BLUE, MAGENTA, BOLD, RESET
 
 CONFIDENCE_HIGH   = "HIGH"
 CONFIDENCE_MEDIUM = "MEDIUM"
@@ -72,19 +64,25 @@ class ServiceEnumerator:
         return port in SSL_PORTS or service in ("https", "imaps", "pop3s", "smtps")
 
     def _grab_banner_ssl(self, port: int, probe: Optional[bytes]) -> str:
-        """SSL banner grab. We disable cert verification intentionally — we're assessing, not validating."""
+        """
+        SSL banner grab. Certificate verification is disabled intentionally —
+        we are assessing reachability and banner data, not validating the cert.
+        """
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode    = ssl.CERT_NONE
 
-        raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        raw.settimeout(self.timeout)
-
-        with ctx.wrap_socket(raw, server_hostname=self.target) as sock:
-            sock.connect((self.target, port))
-            if probe:
-                sock.sendall(probe)
-            return sock.recv(2048).decode("utf-8", errors="ignore").strip()
+        # Wrap the raw socket in a context manager so it is always
+        # closed even if ctx.wrap_socket() raises an exception (e.g. TLS
+        # handshake failure, OS error).  Previously `raw` was created outside
+        # any `with` block and could leak a file descriptor on exceptions.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
+            raw.settimeout(self.timeout)
+            with ctx.wrap_socket(raw, server_hostname=self.target) as sock:
+                sock.connect((self.target, port))
+                if probe:
+                    sock.sendall(probe)
+                return sock.recv(2048).decode("utf-8", errors="ignore").strip()
 
     def _grab_banner_plain(self, port: int, probe: Optional[bytes]) -> str:
         """Plain TCP banner grab."""
@@ -166,11 +164,11 @@ class ServiceEnumerator:
 
         return {
             **port_info,
-            "banner":       clean_banner,
-            "version":      version,
-            "confidence":   confidence,
-            "risk_note":    risk_note,
-            "flagged":      bool(risk_note),
+            "banner":        clean_banner,
+            "version":       version,
+            "confidence":    confidence,
+            "risk_note":     risk_note,
+            "flagged":       bool(risk_note),
             "enumerated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -193,7 +191,7 @@ class ServiceEnumerator:
               f"{self.target} — started at {start_time.strftime('%H:%M:%S')}{RESET}\n")
 
         results = []
-        errors = 0
+        errors  = 0
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_map = {executor.submit(self._enumerate_single, p): p for p in ports}
@@ -208,8 +206,10 @@ class ServiceEnumerator:
 
         duration = round((datetime.now() - start_time).total_seconds(), 2)
 
-        for r in results:
-            r["scan_duration_seconds"] = duration
+        # Store scan_duration_seconds only on the top-level metadata
+        # (written to JSON export), not on every individual service dict, since
+        # it represents the total wall-clock time of the whole enumeration
+        # phase — not the time spent on any individual port.
 
         if errors:
             print(f"{YELLOW}[!] {errors} port(s) could not be enumerated{RESET}")
@@ -227,10 +227,13 @@ class ServiceEnumerator:
         try:
             os.makedirs(self.output_dir, exist_ok=True)
 
-            timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_target = self.target.replace(".", "_")
-            filename    = f"{safe_target}_services_{timestamp}.json"
-            filepath    = os.path.join(self.output_dir, filename)
+            timestamp    = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_target  = self.target.replace(".", "_")
+            filename     = f"{safe_target}_services_{timestamp}.json"
+            filepath     = os.path.join(self.output_dir, filename)
+
+            # Compute total scan duration here for the metadata block
+            enumerated_at_values = [r.get("enumerated_at") for r in results if r.get("enumerated_at")]
 
             export_data = {
                 "meta": {
