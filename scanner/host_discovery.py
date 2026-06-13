@@ -1,14 +1,7 @@
-
 import subprocess
 import platform
 import time
-
-GREEN  = "\033[92m"
-RED    = "\033[91m"
-YELLOW = "\033[93m"
-CYAN   = "\033[96m"
-RESET  = "\033[0m"
-
+from utils.colors import GREEN, RED, YELLOW, CYAN, RESET
 
 class HostDiscovery:
     """
@@ -23,9 +16,11 @@ class HostDiscovery:
         Args:
             target  : IP address or hostname (e.g. "192.168.56.101")
             timeout : Seconds to wait per ping attempt
-            retries : Extra attempts if the first ping fails
+            retries : Extra attempts if the first ping fails (must be >= 0)
         """
-        self.target = target
+        if retries < 0:
+            raise ValueError(f"retries must be >= 0, got {retries}")
+        self.target  = target
         self.timeout = timeout
         self.retries = retries
 
@@ -48,7 +43,7 @@ class HostDiscovery:
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=self.timeout + 2
+            timeout=self.timeout + 2,
         )
         return result.returncode == 0
 
@@ -63,6 +58,8 @@ class HostDiscovery:
                 "attempts":      how many pings it took
             }
         """
+        attempt = 0
+
         for attempt in range(1, self.retries + 2):  # +2 = 1 base + retries
             try:
                 start = time.perf_counter()
