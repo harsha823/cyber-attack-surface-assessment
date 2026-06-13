@@ -57,7 +57,6 @@ No pip installs required — the tool only uses Python's standard library (`sock
 ```bash
 git clone https://github.com/harsha823/cyber-attack-surface-assessment
 cd cyber-attack-surface-assessment
-pip install -r requirements.txt
 ```
 That's it. No virtual environment or package installation needed.
 
@@ -138,9 +137,9 @@ cyber-attack-surface-assessment/
 │   ├── port_scanner.py          # Phase 2: Nmap wrapper, parses XML output
 │   └── service_enum.py          # Phase 3: parallel banner grabs
 │
-├── analyzer/
-│   ├── risk_analyzer.py         # Phase 4: service/port risk scoring
-│   └── recommendations.py       # Phase 5: HTML report generation
+
+│── risk_analyzer.py         # Phase 4: service/port risk scoring
+│── recommendations.py       # Phase 5: HTML report generation
 │
 ├── scans/                       # Created at runtime — Nmap XML and JSON exports
 └── reports/                     # Created at runtime — HTML reports
