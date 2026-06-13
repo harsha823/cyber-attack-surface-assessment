@@ -7,7 +7,6 @@ Runs five sequential phases against a target host:
     3. Service Enum     — what's actually running on those ports?
     4. Risk Analysis    — how dangerous is what we found?
     5. Report Gen       — produce a readable HTML report
-
 Usage:
     python assessor.py <target-ip>
     python assessor.py 192.168.56.101
@@ -20,8 +19,8 @@ from typing import List
 from scanner.host_discovery import HostDiscovery
 from scanner.port_scanner import PortScanner
 from scanner.service_enum import ServiceEnumerator
-from analyzer.risk_analyzer import RiskAnalyzer
-from analyzer.recommendations import ReportGenerator
+from risk_analyzer import RiskAnalyzer
+from recommendations import ReportGenerator
 
 GREEN  = "\033[92m"
 RED    = "\033[91m"
