@@ -19,8 +19,8 @@ from typing import List
 from scanner.host_discovery import HostDiscovery
 from scanner.port_scanner import PortScanner
 from scanner.service_enum import ServiceEnumerator
-from risk_analyzer import RiskAnalyzer
-from recommendations import ReportGenerator
+from analyzer.risk_analyzer import RiskAnalyzer
+from analyzer.recommendations import ReportGenerator
 
 GREEN  = "\033[92m"
 RED    = "\033[91m"
