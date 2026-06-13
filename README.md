@@ -137,7 +137,7 @@ cyber-attack-surface-assessment/
 │   ├── port_scanner.py          # Phase 2: Nmap wrapper, parses XML output
 │   └── service_enum.py          # Phase 3: parallel banner grabs
 │
-├──analyzer/
+├── analyzer/
 │    ├── risk_analyzer.py         # Phase 4: service/port risk scoring
 │    ├── recommendations.py       # Phase 5: HTML report generation
 │
