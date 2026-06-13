@@ -21,9 +21,9 @@ CONFIDENCE_LOW    = "LOW"
 
 # Probes to send after connecting — services that speak first get None
 SERVICE_PROBES: Dict[str, Optional[bytes]] = {
-    "http":     b"HEAD / HTTP/1.0\r\nHost: target\r\n\r\n",
-    "https":    b"HEAD / HTTP/1.0\r\nHost: target\r\n\r\n",
-    "http-alt": b"HEAD / HTTP/1.0\r\nHost: target\r\n\r\n",
+    "http":     f"HEAD / HTTP/1.0\r\nHost: {self.target}\r\n\r\n".encode()",
+    "https":    f"HEAD / HTTP/1.0\r\nHost: {self.target}\r\n\r\n".encode(),
+    "http-alt": f"HEAD / HTTP/1.0\r\nHost: {self.target}\r\n\r\n".encode(),
     "ftp":      None,   # sends banner on connect
     "ssh":      None,
     "smtp":     None,
