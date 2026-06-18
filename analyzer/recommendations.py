@@ -1,228 +1,211 @@
-"""
-recommendations.py — Phase 5: generate an HTML report from the risk findings.
-
-Takes the scored findings from Phase 4, attaches concrete remediation steps
-to each one, and writes a self-contained HTML file to the reports/ directory.
-The HTML report is the deliverable — something you can open in a browser and
-hand to a client or read through yourself without needing any extra tools.
-
-Usage:
-    from analyzer.recommendations import ReportGenerator
-
-    rg = ReportGenerator(target="192.168.56.101")
-    rg.generate(risks)
-"""
-
 import os
-import json
 from datetime import datetime
-from typing import Dict, List, Optional
+from utils.colors import GREEN, RED, YELLOW, CYAN, BOLD, RESET
 
-GREEN  = "\033[92m"
-RED    = "\033[91m"
-YELLOW = "\033[93m"
-CYAN   = "\033[96m"
-BLUE   = "\033[94m"
-BOLD   = "\033[1m"
-RESET  = "\033[0m"
-
-# Concrete remediation steps per service.
-# Each entry is a specific action, not a vague suggestion like "improve security".
-REMEDIATION_MAP: Dict[str, List[str]] = {
+# concrete steps per service — not "keep software updated", actual actions
+REMEDIATION = {
     "telnet": [
-        "Disable the Telnet service immediately — it has no legitimate use in modern environments.",
-        "Replace with SSH for all remote access requirements.",
-        "Block port 23 at the firewall for all external and internal traffic.",
-        "Audit user accounts that may have been using Telnet — rotate all passwords.",
+        "Disable telnet immediately — there's no legitimate use for it in 2024.",
+        "Replace with SSH for all remote access.",
+        "Block port 23 at the firewall.",
+        "Rotate all passwords that may have been sent over telnet.",
     ],
     "ftp": [
-        "Disable plain FTP and replace with SFTP (SSH File Transfer Protocol) or FTPS.",
-        "If FTP must remain, enforce TLS encryption and disable anonymous access.",
-        "Restrict FTP access to specific IP ranges using firewall rules.",
-        "Review FTP logs for any unauthorised access or data exfiltration.",
+        "Disable plain FTP and switch to SFTP or FTPS.",
+        "If FTP must stay, enforce TLS and disable anonymous access.",
+        "Restrict access to specific IPs via firewall.",
+        "Review FTP logs for unauthorized access.",
     ],
     "ssh": [
-        "Disable SSH password authentication — use SSH key pairs only.",
-        "Ensure the SSH version is current (OpenSSH 8.x or higher).",
-        "Change the default port (22) to reduce automated scanning noise.",
-        "Implement fail2ban or equivalent to block brute-force attempts.",
-        "Restrict SSH access to specific IP addresses where possible.",
+        "Disable password auth — keys only.",
+        "Make sure you're running a recent OpenSSH (8.x+).",
+        "Consider moving off port 22 to cut down on automated scans.",
+        "Set up fail2ban or similar to block brute-force attempts.",
     ],
     "http": [
-        "Redirect all HTTP traffic to HTTPS using a 301 permanent redirect.",
-        "Implement HTTP Strict Transport Security (HSTS) header.",
-        "Review server response headers — remove version information (Server: header).",
-        "Check for directory listing being enabled and disable it.",
+        "Redirect all HTTP to HTTPS with a 301.",
+        "Add HSTS so browsers enforce HTTPS going forward.",
+        "Strip the Server: header — no need to advertise your stack.",
+        "Check that directory listing is off.",
     ],
     "https": [
-        "Verify TLS version — disable TLS 1.0 and 1.1, enforce TLS 1.2 minimum.",
-        "Check SSL certificate validity and expiry date.",
-        "Run an SSL Labs scan (ssllabs.com) to check for weak cipher suites.",
-        "Ensure HSTS header is present with a long max-age value.",
+        "Disable TLS 1.0 and 1.1 — enforce 1.2 minimum, prefer 1.3.",
+        "Check cert validity and expiry.",
+        "Run an SSL Labs scan to find weak cipher suites.",
+        "Make sure HSTS is set with a long max-age.",
     ],
     "mysql": [
-        "Bind MySQL to localhost (127.0.0.1) — it should not listen on external interfaces.",
-        "If remote access is required, restrict to specific IP addresses only.",
-        "Ensure the root account has a strong password and remote root login is disabled.",
-        "Audit all MySQL user accounts and remove unused accounts.",
-        "Enable MySQL audit logging to record all queries.",
+        "Bind MySQL to 127.0.0.1 — it should never listen on an external interface.",
+        "If remote access is needed, lock it down to specific IPs.",
+        "Disable remote root login and set a strong root password.",
+        "Audit user accounts and drop anything unused.",
     ],
     "mssql": [
-        "Restrict SQL Server access to application servers only — firewall port 1433.",
-        "Disable the SA account or change its password to a strong credential.",
-        "Disable SQL Server Browser service if not needed.",
-        "Enable SQL Server Audit to log authentication events.",
+        "Firewall port 1433 to application servers only.",
+        "Disable the SA account or change its password.",
+        "Disable SQL Server Browser if not needed.",
+        "Enable auditing for authentication events.",
     ],
     "postgresql": [
-        "Restrict PostgreSQL to localhost unless remote access is explicitly required.",
-        "Review pg_hba.conf to ensure authentication methods are secure.",
-        "Audit all database roles and remove unnecessary superuser privileges.",
-        "Enable SSL connections and disable plain text connections.",
+        "Bind to localhost unless remote access is explicitly required.",
+        "Review pg_hba.conf — make sure auth methods are sane.",
+        "Audit roles and remove unnecessary superuser grants.",
+        "Enable SSL connections.",
     ],
     "mongodb": [
-        "Enable MongoDB authentication immediately — older versions default to no auth.",
-        "Bind to localhost or specific IPs — remove 0.0.0.0 binding.",
-        "Enable TLS/SSL for all connections.",
-        "Audit existing databases for any publicly exposed data.",
+        "Enable authentication — older versions ship with it off.",
+        "Bind to localhost or specific IPs, not 0.0.0.0.",
+        "Enable TLS for all connections.",
+        "Audit existing databases for exposed data.",
     ],
     "redis": [
-        "Enable Redis authentication using the requirepass directive.",
-        "Bind Redis to localhost only — never expose to external interfaces.",
-        "Disable dangerous commands: FLUSHALL, CONFIG, SLAVEOF using rename-command.",
+        "Set requirepass in redis.conf.",
+        "Bind to localhost only.",
+        "Rename or disable dangerous commands: FLUSHALL, CONFIG, SLAVEOF.",
         "Run Redis as a non-root user.",
     ],
     "rdp": [
-        "Restrict RDP access to a VPN or specific trusted IP ranges only.",
+        "Put RDP behind a VPN — it should not be open to the internet.",
         "Enable Network Level Authentication (NLA).",
-        "Ensure the system is patched against BlueKeep (CVE-2019-0708).",
-        "Enable account lockout policies to prevent brute-force attacks.",
-        "Consider changing RDP from the default port 3389.",
+        "Patch for BlueKeep (CVE-2019-0708) if not already done.",
+        "Set account lockout to stop brute-force attempts.",
     ],
     "vnc": [
-        "Set a strong VNC password — default or blank passwords are common.",
-        "Restrict VNC access to localhost and tunnel through SSH.",
-        "Upgrade to a VNC implementation that supports TLS encryption.",
-        "Disable VNC if it is not actively required.",
+        "Set a strong password — blank/default VNC auth is common.",
+        "Tunnel through SSH instead of exposing VNC directly.",
+        "Upgrade to a VNC implementation with TLS.",
+        "Disable VNC if it's not actively in use.",
     ],
     "smb": [
-        "Ensure the system is patched against EternalBlue (MS17-010 / CVE-2017-0144).",
-        "Disable SMBv1 — it is insecure and should not be in use.",
-        "Block ports 445 and 139 at the perimeter firewall.",
-        "Enable SMB signing to prevent relay attacks.",
-        "Audit SMB shares for excessive permissions.",
+        "Patch for EternalBlue (MS17-010 / CVE-2017-0144).",
+        "Disable SMBv1.",
+        "Block ports 445 and 139 at the perimeter.",
+        "Enable SMB signing to stop relay attacks.",
     ],
     "smtp": [
-        "Test the server for open relay configuration using an external tool.",
-        "Implement SPF, DKIM, and DMARC DNS records.",
-        "Enforce TLS for all SMTP connections (STARTTLS).",
-        "Restrict SMTP access to authorised mail servers only.",
+        "Test for open relay with an external tool.",
+        "Add SPF, DKIM, and DMARC records.",
+        "Enforce STARTTLS.",
+        "Restrict SMTP to authorised mail servers.",
     ],
     "snmp": [
-        "Change default community strings ('public', 'private') immediately.",
-        "Upgrade to SNMPv3 with authentication and encryption.",
-        "Restrict SNMP access to monitoring servers only using ACLs.",
-        "If SNMP is not needed, disable the service entirely.",
+        "Change community strings from 'public'/'private' immediately.",
+        "Upgrade to SNMPv3 with auth and encryption.",
+        "Restrict SNMP access to your monitoring server IPs.",
+        "Disable SNMP entirely if you're not using it.",
     ],
     "ldap": [
-        "Disable anonymous LDAP bind — require authentication for all queries.",
-        "Use LDAPS (LDAP over TLS) on port 636 instead of plain LDAP on 389.",
-        "Audit LDAP directory permissions — apply least-privilege access.",
-        "Monitor LDAP logs for unusual enumeration activity.",
+        "Disable anonymous bind.",
+        "Switch to LDAPS (port 636) — plain LDAP on 389 sends creds in the clear.",
+        "Tighten directory permissions — least privilege.",
+        "Watch LDAP logs for enumeration activity.",
     ],
     "pop3": [
-        "Migrate users to POP3S (POP3 over TLS on port 995).",
-        "Disable plain POP3 on port 110 at the server level.",
-        "Consider migrating to IMAP with TLS for better security.",
+        "Move to POP3S on port 995.",
+        "Disable plain POP3 on port 110.",
     ],
     "imap": [
-        "Disable plain IMAP on port 143 — enforce IMAPS (port 993) with TLS.",
-        "Implement account lockout after failed authentication attempts.",
-        "Ensure mail server software is patched to the latest version.",
+        "Disable plain IMAP on 143 — use IMAPS (993) with TLS.",
+        "Add account lockout after failed logins.",
     ],
     "dns": [
-        "Disable DNS zone transfers to unauthorised hosts.",
-        "Test for zone transfer vulnerability: dig AXFR @<target>",
-        "Implement DNSSEC if serving authoritative DNS.",
-        "Restrict recursive DNS queries to internal clients only.",
+        "Disable zone transfers to unauthorised hosts.",
+        "Test: dig AXFR @<target>",
+        "Enable DNSSEC if running authoritative DNS.",
+        "Restrict recursive queries to internal clients.",
     ],
 }
 
-# Used when we don't have specific steps for a service
-DEFAULT_REMEDIATION: List[str] = [
-    "Verify this service is intentionally exposed and document the business reason.",
-    "Ensure the service is running the latest patched version.",
-    "Restrict access to authorised IP ranges using firewall rules.",
-    "Enable service-level logging and monitor for unusual activity.",
+DEFAULT_STEPS = [
+    "Verify this service is intentionally exposed and document why.",
+    "Make sure it's running the latest patched version.",
+    "Restrict access to known IP ranges.",
+    "Enable logging and watch for unusual activity.",
 ]
+
+BADGE_COLOR = {
+    "CRITICAL": "#ff4444",
+    "HIGH":     "#ff8800",
+    "MEDIUM":   "#ffcc00",
+    "LOW":      "#44aaff",
+    "INFO":     "#aaaaaa",
+}
 
 
 class ReportGenerator:
-    """
-    Builds a standalone HTML assessment report from risk findings.
-
-    The output is a single file with no external dependencies — CSS is inline,
-    no JavaScript frameworks, nothing to install. Open it in any browser.
-    """
-
-    def __init__(self, target: str, output_dir: str = "reports"):
+    def __init__(self, target, output_dir="reports"):
         self.target     = target
         self.output_dir = output_dir
 
-    def _get_recommendations(self, service: str) -> List[str]:
-        """Returns remediation steps for a service, falling back to generic advice."""
-        return REMEDIATION_MAP.get(service.lower(), DEFAULT_REMEDIATION)
+    def generate(self, risks):
+        if not risks:
+            print(f"{RED}[-] no findings to report{RESET}")
+            return None
 
-    def _risk_badge_colour(self, level: str) -> str:
-        """CSS colour for a risk level badge."""
-        return {
-            "CRITICAL": "#ff4444",
-            "HIGH":     "#ff8800",
-            "MEDIUM":   "#ffcc00",
-            "LOW":      "#44aaff",
-            "INFO":     "#aaaaaa",
-        }.get(level.upper(), "#aaaaaa")
-
-    def _build_html(self, risks: List[Dict], scan_date: str) -> str:
-        """Builds the full HTML document string. All CSS is inline — no external deps."""
-        counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+        scan_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for r in risks:
-            level = r.get("risk_level", "INFO").upper()
-            if level in counts:
-                counts[level] += 1
+            r["steps"] = REMEDIATION.get(r.get("service", ""), DEFAULT_STEPS)
 
-        findings_html = ""
+        os.makedirs(self.output_dir, exist_ok=True)
+        ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(self.output_dir, f"{self.target.replace('.', '_')}_report_{ts}.html")
+
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(self._html(risks, scan_date))
+            print(f"{GREEN}[+] report → {filepath}{RESET}")
+            return filepath
+        except OSError as e:
+            print(f"{RED}[-] couldn't write report: {e}{RESET}")
+            return None
+
+    def display_summary(self, risks):
+        priority = [r for r in risks if r.get("risk_level") in ("CRITICAL", "HIGH")]
+
+        print(f"{BOLD}{GREEN}[+] priority actions{RESET}\n")
+        if not priority:
+            print(f"  {CYAN}no CRITICAL or HIGH findings — looking good.{RESET}\n")
+            return
+
+        for r in priority:
+            col   = RED if r["risk_level"] == "CRITICAL" else YELLOW
+            steps = REMEDIATION.get(r.get("service", ""), DEFAULT_STEPS)
+            print(f"  {col}{BOLD}{r['risk_level']}{RESET}  {CYAN}{r['port']}/{r['protocol']}{RESET}  {r['service']}")
+            for i, step in enumerate(steps[:2], 1):
+                print(f"    {i}. {step}")
+            print()
+
+    def _html(self, risks, scan_date):
+        counts = {l: 0 for l in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")}
         for r in risks:
-            port      = r.get("port", "?")
-            protocol  = r.get("protocol", "tcp")
-            service   = r.get("service", "unknown")
-            level     = r.get("risk_level", "INFO").upper()
-            reason    = r.get("risk_reason", "")
-            version   = r.get("version", "Unknown")
-            banner    = r.get("banner", "—")
-            colour    = self._risk_badge_colour(level)
-            rec_steps = self._get_recommendations(service)
-            rec_items = "".join(f"<li>{step}</li>" for step in rec_steps)
+            counts[r.get("risk_level", "INFO")] += 1
 
-            findings_html += f"""
-            <div class="finding">
-                <div class="finding-header">
-                    <span class="port-label">{port}/{protocol}</span>
-                    <span class="service-label">{service}</span>
-                    <span class="badge" style="background:{colour}">{level}</span>
+        cards = ""
+        for r in risks:
+            port    = r.get("port", "?")
+            proto   = r.get("protocol", "tcp")
+            service = r.get("service", "unknown")
+            level   = r.get("risk_level", "INFO")
+            reason  = r.get("risk_reason", "")
+            version = r.get("version", "Unknown")
+            banner  = r.get("banner", "—")
+            color   = BADGE_COLOR.get(level, "#aaaaaa")
+            steps   = "".join(f"<li>{s}</li>" for s in r.get("steps", DEFAULT_STEPS))
+
+            cards += f"""
+            <div class="card">
+                <div class="card-head">
+                    <span class="port">{port}/{proto}</span>
+                    <span class="svc">{service}</span>
+                    <span class="badge" style="background:{color}">{level}</span>
                 </div>
-                <div class="finding-body">
+                <div class="card-body">
                     <p class="reason">{reason}</p>
-                    <div class="detail-row">
-                        <span class="detail-label">Version</span>
-                        <span class="detail-value">{version}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Banner</span>
-                        <span class="detail-value code">{banner}</span>
-                    </div>
-                    <div class="recommendations">
-                        <p class="rec-title">Remediation Steps</p>
-                        <ol>{rec_items}</ol>
+                    <div class="row"><span class="lbl">Version</span><span>{version}</span></div>
+                    <div class="row"><span class="lbl">Banner</span><span class="mono">{banner}</span></div>
+                    <div class="steps">
+                        <p class="steps-title">Remediation</p>
+                        <ol>{steps}</ol>
                     </div>
                 </div>
             </div>"""
@@ -230,152 +213,84 @@ class ReportGenerator:
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Assessment Report — {self.target}</title>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Assessment — {self.target}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          background: #0d1117; color: #c9d1d9; padding: 32px 24px;
+          max-width: 960px; margin: 0 auto; font-size: 14px; line-height: 1.6; }}
 
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: #0d1117;
-            color: #c9d1d9;
-            padding: 32px 24px;
-            max-width: 960px;
-            margin: 0 auto;
-            font-size: 14px;
-            line-height: 1.6;
-        }}
+  .header {{ border-bottom: 1px solid #30363d; padding-bottom: 24px; margin-bottom: 32px; }}
+  .header h1 {{ font-size: 22px; color: #58a6ff; margin-bottom: 6px; }}
+  .meta {{ color: #8b949e; font-size: 13px; display: flex; gap: 24px; flex-wrap: wrap; margin-top: 12px; }}
+  .meta b {{ color: #c9d1d9; }}
 
-        .header {{
-            border-bottom: 1px solid #30363d;
-            padding-bottom: 24px;
-            margin-bottom: 32px;
-        }}
-        .header h1 {{ font-size: 22px; font-weight: 600; color: #58a6ff; margin-bottom: 6px; }}
-        .header .meta {{ color: #8b949e; font-size: 13px; display: flex; gap: 24px; flex-wrap: wrap; margin-top: 12px; }}
-        .header .meta span b {{ color: #c9d1d9; }}
+  .summary {{ display: flex; gap: 12px; margin-bottom: 40px; flex-wrap: wrap; }}
+  .tile {{ flex: 1; min-width: 90px; background: #161b22; border: 1px solid #30363d;
+            border-radius: 8px; padding: 16px; text-align: center; }}
+  .tile .n {{ font-size: 28px; font-weight: 700; line-height: 1.1; }}
+  .tile .l {{ font-size: 11px; color: #8b949e; text-transform: uppercase;
+               letter-spacing: .08em; margin-top: 4px; }}
 
-        .summary {{ display: flex; gap: 12px; margin-bottom: 40px; flex-wrap: wrap; }}
-        .summary-card {{
-            flex: 1; min-width: 100px;
-            background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; text-align: center;
-        }}
-        .summary-card .count {{ font-size: 28px; font-weight: 700; line-height: 1.1; }}
-        .summary-card .label {{ font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }}
+  h2 {{ font-size: 15px; color: #58a6ff; margin-bottom: 16px; padding-bottom: 8px;
+        border-bottom: 1px solid #21262d; }}
 
-        h2 {{ font-size: 15px; font-weight: 600; color: #58a6ff; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #21262d; }}
+  .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+            margin-bottom: 16px; overflow: hidden; }}
+  .card-head {{ display: flex; align-items: center; gap: 12px; padding: 14px 18px;
+                background: #1c2128; border-bottom: 1px solid #30363d; }}
+  .port {{ font-family: monospace; font-size: 13px; color: #79c0ff; font-weight: 600; min-width: 90px; }}
+  .svc  {{ font-size: 13px; flex: 1; font-weight: 500; }}
+  .badge {{ padding: 3px 10px; border-radius: 12px; font-size: 11px;
+             font-weight: 700; color: #0d1117; letter-spacing: .05em; }}
 
-        .finding {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 16px; overflow: hidden; }}
-        .finding-header {{ display: flex; align-items: center; gap: 12px; padding: 14px 18px; background: #1c2128; border-bottom: 1px solid #30363d; }}
-        .port-label {{ font-family: "Courier New", monospace; font-size: 13px; color: #79c0ff; font-weight: 600; min-width: 90px; }}
-        .service-label {{ font-size: 13px; color: #e6edf3; flex: 1; font-weight: 500; }}
-        .badge {{ padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; color: #0d1117; letter-spacing: 0.05em; }}
-        .finding-body {{ padding: 16px 18px; }}
-        .reason {{ color: #8b949e; font-size: 13px; margin-bottom: 12px; }}
-        .detail-row {{ display: flex; gap: 12px; margin-bottom: 6px; font-size: 12px; }}
-        .detail-label {{ color: #8b949e; min-width: 56px; }}
-        .detail-value {{ color: #c9d1d9; }}
-        .detail-value.code {{ font-family: "Courier New", monospace; color: #79c0ff; word-break: break-all; }}
-        .recommendations {{ margin-top: 14px; background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 12px 16px; }}
-        .rec-title {{ font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #3fb950; margin-bottom: 8px; }}
-        ol {{ padding-left: 18px; }}
-        ol li {{ font-size: 12px; color: #8b949e; margin-bottom: 4px; line-height: 1.5; }}
+  .card-body {{ padding: 16px 18px; }}
+  .reason {{ color: #8b949e; font-size: 13px; margin-bottom: 12px; }}
+  .row {{ display: flex; gap: 12px; margin-bottom: 6px; font-size: 12px; }}
+  .lbl {{ color: #8b949e; min-width: 56px; }}
+  .mono {{ font-family: monospace; color: #79c0ff; word-break: break-all; }}
 
-        .footer {{ margin-top: 48px; padding-top: 16px; border-top: 1px solid #21262d; color: #484f58; font-size: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }}
-    </style>
+  .steps {{ margin-top: 14px; background: #0d1117; border: 1px solid #21262d;
+             border-radius: 6px; padding: 12px 16px; }}
+  .steps-title {{ font-size: 11px; font-weight: 600; text-transform: uppercase;
+                   letter-spacing: .08em; color: #3fb950; margin-bottom: 8px; }}
+  ol {{ padding-left: 18px; }}
+  li {{ font-size: 12px; color: #8b949e; margin-bottom: 4px; }}
+
+  .footer {{ margin-top: 48px; padding-top: 16px; border-top: 1px solid #21262d;
+              color: #484f58; font-size: 12px; display: flex;
+              justify-content: space-between; flex-wrap: wrap; gap: 8px; }}
+</style>
 </head>
 <body>
 
-    <div class="header">
-        <h1>Attack Surface Assessment Report</h1>
-        <div class="meta">
-            <span><b>Target</b> &nbsp; {self.target}</span>
-            <span><b>Date</b> &nbsp; {scan_date}</span>
-            <span><b>Findings</b> &nbsp; {len(risks)}</span>
-            <span><b>Tool</b> &nbsp; Cyber Attack Surface Assessment Framework</span>
-        </div>
-    </div>
+<div class="header">
+  <h1>Attack Surface Assessment</h1>
+  <div class="meta">
+    <span><b>Target</b> &nbsp;{self.target}</span>
+    <span><b>Date</b> &nbsp;{scan_date}</span>
+    <span><b>Findings</b> &nbsp;{len(risks)}</span>
+  </div>
+</div>
 
-    <h2>Executive Summary</h2>
-    <div class="summary">
-        <div class="summary-card"><div class="count" style="color:#ff4444">{counts["CRITICAL"]}</div><div class="label">Critical</div></div>
-        <div class="summary-card"><div class="count" style="color:#ff8800">{counts["HIGH"]}</div><div class="label">High</div></div>
-        <div class="summary-card"><div class="count" style="color:#ffcc00">{counts["MEDIUM"]}</div><div class="label">Medium</div></div>
-        <div class="summary-card"><div class="count" style="color:#44aaff">{counts["LOW"]}</div><div class="label">Low</div></div>
-        <div class="summary-card"><div class="count" style="color:#aaaaaa">{counts["INFO"]}</div><div class="label">Info</div></div>
-    </div>
+<h2>Summary</h2>
+<div class="summary">
+  <div class="tile"><div class="n" style="color:#ff4444">{counts['CRITICAL']}</div><div class="l">Critical</div></div>
+  <div class="tile"><div class="n" style="color:#ff8800">{counts['HIGH']}</div><div class="l">High</div></div>
+  <div class="tile"><div class="n" style="color:#ffcc00">{counts['MEDIUM']}</div><div class="l">Medium</div></div>
+  <div class="tile"><div class="n" style="color:#44aaff">{counts['LOW']}</div><div class="l">Low</div></div>
+  <div class="tile"><div class="n" style="color:#aaaaaa">{counts['INFO']}</div><div class="l">Info</div></div>
+</div>
 
-    <h2>Findings</h2>
-    {findings_html}
+<h2>Findings</h2>
+{cards}
 
-    <div class="footer">
-        <span>Cyber Attack Surface Assessment Framework</span>
-        <span>Generated {scan_date}</span>
-    </div>
+<div class="footer">
+  <span>Cyber Attack Surface Assessment Framework</span>
+  <span>Generated {scan_date}</span>
+</div>
 
 </body>
 </html>"""
-
-    def generate(self, risks: List[Dict]) -> Optional[str]:
-        """
-        Writes the HTML report to reports/<target>_report_<timestamp>.html.
-        Returns the file path, or None if generation failed.
-        """
-        if not risks:
-            print(f"{RED}[-] No findings to report{RESET}")
-            return None
-
-        scan_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        for r in risks:
-            r["recommendations"] = self._get_recommendations(r.get("service", ""))
-
-        try:
-            os.makedirs(self.output_dir, exist_ok=True)
-
-            timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_target = self.target.replace(".", "_")
-            filename    = f"{safe_target}_report_{timestamp}.html"
-            filepath    = os.path.join(self.output_dir, filename)
-
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(self._build_html(risks, scan_date))
-
-            print(f"{GREEN}[+] Report generated → {filepath}{RESET}")
-            return filepath
-
-        except OSError as e:
-            print(f"{RED}[-] Failed to generate report: {e}{RESET}")
-            return None
-
-    def display_summary(self, risks: List[Dict]) -> None:
-        """
-        Prints a quick terminal summary of the top remediation actions.
-        Only shows CRITICAL and HIGH findings — the full details are in the HTML report.
-        """
-        if not risks:
-            print(f"{RED}[-] No findings to summarise{RESET}")
-            return
-
-        priority = [r for r in risks if r.get("risk_level") in ("CRITICAL", "HIGH")]
-
-        print(f"{BOLD}{GREEN}[+] Priority Remediation Actions{RESET}\n")
-
-        if not priority:
-            print(f"  {CYAN}No CRITICAL or HIGH findings — good posture on this target.{RESET}\n")
-            return
-
-        for r in priority:
-            port     = r.get("port", "?")
-            protocol = r.get("protocol", "tcp")
-            service  = r.get("service", "unknown")
-            level    = r.get("risk_level", "")
-            colour   = RED if level == "CRITICAL" else YELLOW
-
-            print(f"  {colour}{BOLD}{level}{RESET}  {CYAN}{port}/{protocol}{RESET}  {service}")
-
-            steps = self._get_recommendations(service)
-            for i, step in enumerate(steps[:2], 1):  # show top 2 steps in terminal
-                print(f"    {i}. {step}")
-            print()
