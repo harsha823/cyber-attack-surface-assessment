@@ -2,3 +2,10 @@ __pycache__/
 *.pyc
 scans/
 logs/
+venv/
+scans/*.xml
+scans/*.gnmap
+scans/*.nmap
+scans/*.json
+reports/*.html
+.DS_Store
