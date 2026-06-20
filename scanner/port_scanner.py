@@ -4,15 +4,7 @@ import xml.etree.ElementTree as ET
 import os
 import shutil
 from datetime import datetime
-
-
-GREEN  = "\033[92m"
-RED    = "\033[91m"
-YELLOW = "\033[93m"
-CYAN   = "\033[96m"
-BLUE   = "\033[94m"
-RESET  = "\033[0m"
-
+from utils.colors import GREEN, RED, YELLOW, CYAN, BLUE, RESET
 
 SPEED_PROFILES = {
     "sneaky" : "-T2",   
