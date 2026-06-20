@@ -1,228 +1,117 @@
 # Cyber Attack Surface Assessment Framework
 
-A lightweight, terminal-based tool for mapping the attack surface of a host. Point it at a target IP, and it works through five sequential phases — host discovery, port scanning, service enumeration, risk analysis, and report generation — finishing with a standalone HTML report you can open in any browser.
-
-Built on top of Nmap for port scanning, with custom Python code handling everything else. No heavy frameworks, no external Python dependencies beyond the standard library.
-
----
-
-## What it does
-
-```
-Phase 1 — Host Discovery     Is the target reachable?
-Phase 2 — Port Scanning      Which ports are open? (Nmap)
-Phase 3 — Service Enumeration What's running on those ports? (banner grabs)
-Phase 4 — Risk Analysis      How dangerous is what we found?
-Phase 5 — Report Generation  Write an HTML report with remediation steps
-```
-
-Sample terminal output:
-
-```
-╔══════════════════════════════════════════════════════╗
-║     Cyber Attack Surface Assessment Framework        ║
-╚══════════════════════════════════════════════════════╝
-  Version  : 0.5.0
-  Target   : 192.168.56.101
-  Started  : 2024-06-01 14:30:22
-
-──────────────────────────────────────────────────────
-  Phase 2 — Port Scanning
-──────────────────────────────────────────────────────
-
-[+] 4 open port(s) found on 192.168.56.101
-
-  PORT        PROTOCOL  STATE   SERVICE       VERSION
-  ────────────────────────────────────────────────────────────
-  21/tcp      tcp       open    ftp           vsftpd 3.0.3
-  22/tcp      tcp       open    ssh           OpenSSH 7.4
-  80/tcp      tcp       open    http          Apache httpd 2.4.6
-  3306/tcp    tcp       open    mysql         MySQL 5.7.29
-```
-
----
-
-## Prerequisites
-
-- Python 3.8+
-- [Nmap](https://nmap.org/download.html) installed and on your PATH
-- Linux, macOS, or Windows (WSL recommended on Windows)
-
-No pip installs required — the tool only uses Python's standard library (`socket`, `subprocess`, `ssl`, `json`, `concurrent.futures`).
-
----
-
-## Installation
+A Python tool that automates the early stages of a security assessment — host discovery, port scanning, service enumeration, risk scoring, and report generation — from a single command.
 
 ```bash
-git clone https://github.com/harsha823/cyber-attack-surface-assessment
-cd cyber-attack-surface-assessment
-```
-That's it. No virtual environment or package installation needed.
-
-Make sure Nmap is installed:
-
-```bash
-# Linux
-sudo apt install nmap
-
-# macOS
-brew install nmap
-
-# Windows — grab the installer from https://nmap.org/download.html
-```
-
----
-
-## Usage
-
-```bash
-python assessor.py <target-ip>
-```
-
-Examples:
-
-```bash
-# Scan a lab machine
 python assessor.py 192.168.56.101
-
-# Scan your local machine
-python assessor.py 127.0.0.1
 ```
 
-> **Only run this against hosts you own or have explicit permission to test.** Unauthorized port scanning is illegal in most jurisdictions.
+All five phases are complete and working end to end.
 
-The tool will create two directories as it runs:
+## Motivation
 
-- `scans/` — raw Nmap XML output and JSON exports from phases 3 and 4
-- `reports/` — the final HTML report
+Most security tools abstract away the details of what they're actually doing. This project was an attempt to understand that process directly — what distinguishes an "open" port from a "confirmed" service, and what separates a finding that's merely noted from one that's flagged CRITICAL.
 
----
+It also served as a deliberate exercise in writing production-style Python: structured modules, defensive error handling, and a commit history where each message documents the reasoning behind a change rather than just the change itself.
 
-## Output
+## Pipeline
 
-### Terminal
+```
+Target
+  │
+  ▼
+Host Discovery        — confirms the target is reachable
+  │
+  ▼
+Port Scanning          — Nmap scan, parsed from structured XML
+  │
+  ▼
+Service Enumeration    — banner grabbing, confidence scoring
+  │
+  ▼
+Risk Analysis           — CRITICAL / HIGH / MEDIUM / LOW / INFO
+  │
+  ▼
+Report Generation       — HTML report with targeted remediation steps
+```
 
-Each phase prints its results live as it runs. Risk levels are colour-coded:
+A run against a local test environment:
 
-| Colour | Level    | Meaning                              |
-|--------|----------|--------------------------------------|
-| Red (bold) | CRITICAL | Fix immediately                  |
-| Red    | HIGH     | Fix as soon as possible              |
-| Yellow | MEDIUM   | Schedule for remediation             |
-| Cyan   | LOW      | Review and monitor                   |
-| Blue   | INFO     | Informational, no immediate action   |
+![Terminal output](screenshots/terminal-output.png)
 
-### HTML Report
+The corresponding findings, rendered as a report:
 
-After all five phases complete, a self-contained HTML file is written to `reports/`. It includes:
+![Risk report](screenshots/risk-report.png)
 
-- Executive summary with counts per risk level
-- A card for each finding showing port, service, risk level, and banner
-- Concrete remediation steps for each service (not just "update your software")
-- Scan metadata (target, date, total findings)
-
-The file has no external dependencies — CSS is inline, no JavaScript frameworks. Open it in any browser.
-
----
+Both captures are from a live scan against a machine running a mix of normal and intentionally vulnerable services (plain FTP, Telnet) — nothing here is staged.
 
 ## Project structure
 
 ```
 cyber-attack-surface-assessment/
-├── assessor.py                  # Entry point — runs all five phases
 │
 ├── scanner/
-│   ├── host_discovery.py        # Phase 1: ping check with retry logic
-│   ├── port_scanner.py          # Phase 2: Nmap wrapper, parses XML output
-│   └── service_enum.py          # Phase 3: parallel banner grabs
+│   ├── host_discovery.py      # is the target reachable?
+│   ├── port_scanner.py        # what ports are open?
+│   └── service_enum.py        # what's running, and with what confidence?
 │
 ├── analyzer/
-│    ├── risk_analyzer.py         # Phase 4: service/port risk scoring
-│    ├── recommendations.py       # Phase 5: HTML report generation
+│   ├── risk_analyzer.py       # how severe is each finding?
+│   └── recommendations.py     # remediation steps and HTML report generation
 │
-├── scans/                       # Created at runtime — Nmap XML and JSON exports
-└── reports/                     # Created at runtime — HTML reports
+├── reports/                   # generated HTML reports
+├── scans/                     # raw Nmap XML and JSON exports (not committed)
+├── screenshots/               # README assets
+├── assessor.py                # orchestrates all five phases
+├── requirements.txt
+└── README.md
 ```
 
----
+## How each phase works
 
-## How the phases work
+**Host Discovery** sends a ping before any scanning begins, so the tool doesn't waste time on an unreachable target. Cross-platform, retries on failure, and reports response time.
 
-### Phase 1 — Host Discovery
+**Port Scanning** wraps Nmap (`-sV --open`), saves the raw XML to `scans/`, and parses it into structured data the rest of the pipeline consumes. Port range and scan speed are both configurable.
 
-A simple ping check before we waste time scanning. Handles Linux/macOS/Windows differences in the ping command, retries up to 2 times, and measures round-trip time. The assessment aborts here if the host is unreachable.
+**Service Enumeration** connects to every open port in parallel and attempts to read a banner, with SSL support where required. Each result is tagged with a confidence level — a banner we actually read carries more weight than a service Nmap merely inferred, and the risk scoring downstream reflects that distinction.
 
-### Phase 2 — Port Scanning
+**Risk Analysis** checks both the service name and the port number, since Nmap doesn't always report the names you'd expect — port 445 is reported as `microsoft-ds`, not `smb`. That mismatch was a real bug in an earlier version: remediation advice for some of the most common findings (SMB, RDP, MSSQL) was silently falling back to generic guidance because the lookup table didn't recognize Nmap's raw service names. It's resolved now with an alias table, documented in the commit history.
 
-Wraps Nmap with `-sV --open` to detect service versions on ports 1–1024. The raw XML output is saved to `scans/` for reference, then parsed into a clean list of open port dicts. You can change the port range or scan speed in `assessor.py`.
+**Report Generation** compiles everything into a single HTML file with remediation steps specific to each finding — not general advice, but concrete actions such as disabling SMBv1 and patching MS17-010.
 
-Three speed profiles are available:
+## Setup
 
-| Profile | Nmap flag | Use case |
-|---------|-----------|----------|
-| `sneaky` | `-T2` | Slower, less likely to trigger IDS |
-| `normal` | `-T3` | Default — good for most situations |
-| `fast`   | `-T4` | Lab environments |
-
-### Phase 3 — Service Enumeration
-
-Connects to each open port and grabs whatever the service says first (the "banner"). Runs all connections in parallel using a thread pool so you're not sitting through individual timeouts sequentially.
-
-Each result gets:
-- The cleaned banner text
-- A parsed version string (prefers Nmap's version, falls back to the banner)
-- A confidence level (HIGH/MEDIUM/LOW) based on how much we actually confirmed
-- A risk flag if the service is known to be commonly misconfigured
-
-### Phase 4 — Risk Analysis
-
-Scores each finding using two lookup tables — one keyed by service name (`ftp`, `rdp`, etc.) and one keyed by port number. The higher score wins. Low-confidence results are downgraded one level to avoid false alarms from ports where we couldn't confirm what was actually running.
-
-Known risky configurations that get flagged:
-
-| Service | Default Level | Why |
-|---------|---------------|-----|
-| Telnet  | CRITICAL | Completely unencrypted |
-| MongoDB | CRITICAL | Older versions expose data with no auth |
-| Redis   | CRITICAL | Often no auth, can be used for RCE |
-| FTP     | HIGH | Credentials in plain text |
-| RDP     | HIGH | BlueKeep and brute-force risk |
-| MySQL   | HIGH | Database shouldn't be network-facing |
-| SMTP    | MEDIUM | Open relay risk |
-| SSH     | LOW | Secure but verify password auth is off |
-| HTTPS   | INFO | Encrypted, still worth checking TLS version |
-
-### Phase 5 — Report Generation
-
-Attaches concrete remediation steps to each finding and writes a standalone HTML file. The terminal output shows the top 2 actions for CRITICAL and HIGH findings; the full list is in the HTML report.
-
----
-
-## Configuration
-
-The main settings are at the top of `assessor.py`:
-
-```python
-# Change the port range
-ps = PortScanner(target=target, ports="1-65535", speed="fast")
-
-# Change enumeration timeout (seconds per port)
-se = ServiceEnumerator(target=target, timeout=5)
+```bash
+git clone https://github.com/harsha823/cyber-attack-surface-assessment.git
+cd cyber-attack-surface-assessment
 ```
 
-To add a new service to the risk scoring, edit the `SERVICE_RISK_MAP` in `risk_analyzer.py`. To add remediation steps for a service, add an entry to `REMEDIATION_MAP` in `recommendations.py`.
+Nmap is the only external dependency:
 
----
+```bash
+sudo apt install nmap     # Linux
+brew install nmap         # macOS
+# Windows: https://nmap.org/download.html
+```
 
-## Legal notice
+No Python packages are required beyond the standard library.
 
-This tool is intended for use on systems you own or have written permission to test. Running port scans or vulnerability assessments against systems without authorization is illegal in most countries and may result in criminal charges.
+```bash
+python assessor.py <target-ip>
+```
 
-The authors take no responsibility for misuse of this tool.
+Each run produces a JSON export in `scans/` and an HTML report in `reports/`.
 
----
+**Scope note:** this tool is intended for systems you own or have explicit written authorization to assess — your own lab environment, a platform such as TryHackMe or HackTheBox, or a sanctioned engagement. It is not intended for scanning systems without permission.
+
+## Built with
+
+Python 3 · `subprocess` · `socket` / `ssl` · `concurrent.futures` · `xml.etree.ElementTree` · Nmap
+
+## Development notes
+
+The commit history includes the bugs alongside the features, including the service-name mismatch described above. That history is left intact deliberately — it reflects the actual development process rather than a cleaned-up final state.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
