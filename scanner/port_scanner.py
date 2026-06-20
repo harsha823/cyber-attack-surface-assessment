@@ -1,95 +1,255 @@
+
 import subprocess
 import xml.etree.ElementTree as ET
 import os
 import shutil
 from datetime import datetime
-from utils.colors import GREEN, RED, YELLOW, CYAN, BLUE, RESET
 
-SPEED = {"sneaky": "-T2", "normal": "-T3", "fast": "-T4"}
+
+GREEN  = "\033[92m"
+RED    = "\033[91m"
+YELLOW = "\033[93m"
+CYAN   = "\033[96m"
+BLUE   = "\033[94m"
+RESET  = "\033[0m"
+
+
+SPEED_PROFILES = {
+    "sneaky" : "-T2",   
+    "normal" : "-T3",   
+    "fast"   : "-T4",   
+}
 
 
 class PortScanner:
-    def __init__(self, target, ports="1-1024", speed="normal", scan_dir="scans"):
+    """
+    Wraps Nmap to perform a TCP port scan and return structured results.
+
+    Features:
+        - Checks Nmap is installed before running
+        - Saves raw XML output to scans/ directory
+        - Parses XML into clean list of dicts
+        - Colour-coded terminal output
+        - Configurable port range and scan speed
+    """
+
+    def __init__(
+        self,
+        target   : str,
+        ports    : str = "1-1024",
+        speed    : str = "normal",
+        scan_dir : str = "scans",
+    ):
+        """
+        Args:
+            target   : IP address or hostname to scan
+            ports    : Port range (e.g. "1-1024", "1-65535", "22,80,443")
+            speed    : "sneaky", "normal", or "fast"  (default: "normal")
+            scan_dir : Directory to save raw Nmap XML output
+        """
         self.target   = target
         self.ports    = ports
-        self.speed    = SPEED.get(speed, "-T3")
+        self.speed    = SPEED_PROFILES.get(speed, "-T3")
         self.scan_dir = scan_dir
 
-    def run_scan(self):
-        if not shutil.which("nmap"):
-            print(f"{RED}[-] nmap not found — install it (apt/brew/nmap.org){RESET}")
-            return []
+   
 
+    def _check_nmap(self) -> bool:
+        """
+        Verifies that Nmap is installed and accessible on PATH.
+
+        Returns:
+            True if nmap found, False otherwise
+        """
+        if shutil.which("nmap") is None:
+            print(f"{RED}[-] Nmap not found. Install it first:{RESET}")
+            print(f"    Linux  : sudo apt install nmap")
+            print(f"    macOS  : brew install nmap")
+            print(f"    Windows: https://nmap.org/download.html")
+            return False
+        return True
+
+    def _get_output_path(self) -> str:
+        """
+        Builds a timestamped file path for saving scan output.
+
+        Example: scans/192.168.56.101_20240601_143022
+        """
         os.makedirs(self.scan_dir, exist_ok=True)
-        ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_base = os.path.join(self.scan_dir, f"{self.target.replace('.', '_')}_{ts}")
-        xml_path = f"{out_base}.xml"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename  = f"{self.target.replace('.', '_')}_{timestamp}"
+        return os.path.join(self.scan_dir, filename)
 
-        cmd = ["nmap", "-sV", "--open", "-p", self.ports, self.speed, "-oX", xml_path, self.target]
-        print(f"{YELLOW}[*] {' '.join(cmd)}{RESET}\n")
+    def _build_command(self, output_path: str) -> list:
+        """
+        Builds the Nmap command.
 
-        # scale timeout with port range so wide scans don't get killed early
-        try:
-            lo, hi = (int(x) for x in self.ports.split("-"))
-            timeout = max(120, min((hi - lo) // 2, 1800))
-        except ValueError:
-            timeout = 300  # comma list or single port, just give it 5 min
+        Flags used:
+            -sV          : probe open ports to detect service/version
+            -p           : port range
+            -T<n>        : timing template (speed)
+            --open       : only show open ports (cleaner output)
+            -oX          : save output as XML for parsing
+        """
+        return [
+            "nmap",
+            "-sV",
+            "--open",
+            "-p", self.ports,
+            self.speed,
+            "-oX", f"{output_path}.xml",
+            self.target,
+        ]
 
-        try:
-            subprocess.run(cmd, check=True, timeout=timeout)
-        except subprocess.CalledProcessError as e:
-            print(f"{RED}[-] nmap failed (exit {e.returncode}){RESET}")
-            return []
-        except subprocess.TimeoutExpired:
-            print(f"{RED}[-] scan timed out after {timeout}s{RESET}")
-            return []
+    def _parse_xml(self, xml_path: str) -> list:
+        """
+        Parses Nmap XML output into a clean list of open port dicts.
 
-        print(f"\n{CYAN}[*] saved → {xml_path}{RESET}")
-        return self._parse(xml_path)
+        Args:
+            xml_path : path to the .xml file Nmap created
 
-    def _parse(self, xml_path):
+        Returns:
+            List of dicts, one per open port:
+            [
+                {
+                    "port"    : 22,
+                    "protocol": "tcp",
+                    "state"   : "open",
+                    "service" : "ssh",
+                    "version" : "OpenSSH 8.2",
+                },
+                ...
+            ]
+        """
         if not os.path.exists(xml_path):
-            print(f"{RED}[-] xml not found: {xml_path}{RESET}")
-            return []
-        try:
-            root = ET.parse(xml_path).getroot()
-        except ET.ParseError as e:
-            print(f"{RED}[-] couldn't parse nmap xml: {e}{RESET}")
+            print(f"{RED}[-] XML output file not found: {xml_path}{RESET}")
             return []
 
-        ports = []
+        try:
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+        except ET.ParseError as e:
+            print(f"{RED}[-] Failed to parse Nmap XML: {e}{RESET}")
+            return []
+
+        open_ports = []
+
         for host in root.findall("host"):
-            for port in (host.find("ports") or []).findall("port"):
-                state = port.find("state")
-                if state is None or state.get("state") != "open":
+            ports_elem = host.find("ports")
+            if ports_elem is None:
+                continue
+
+            for port in ports_elem.findall("port"):
+                state_elem   = port.find("state")
+                service_elem = port.find("service")
+
+                if state_elem is None:
                     continue
-                svc = port.find("service")
-                parts = []
-                if svc is not None:
-                    parts = [svc.get("product", ""), svc.get("version", ""), svc.get("extrainfo", "")]
-                ports.append({
-                    "port":     int(port.get("portid", 0)),
+
+                state = state_elem.get("state", "")
+                if state != "open":
+                    continue
+
+                # Build version string from available fields
+                version = ""
+                if service_elem is not None:
+                    product      = service_elem.get("product",      "")
+                    ver          = service_elem.get("version",       "")
+                    extra        = service_elem.get("extrainfo",     "")
+                    version_parts = [p for p in [product, ver, extra] if p]
+                    version       = " ".join(version_parts)
+
+                open_ports.append({
+                    "port"    : int(port.get("portid", 0)),
                     "protocol": port.get("protocol", "tcp"),
-                    "state":    "open",
-                    "service":  svc.get("name", "unknown") if svc is not None else "unknown",
-                    "version":  " ".join(p for p in parts if p) or "—",
+                    "state"   : state,
+                    "service" : service_elem.get("name", "unknown") if service_elem is not None else "unknown",
+                    "version" : version or "—",
                 })
 
-        return sorted(ports, key=lambda x: x["port"])
+        return sorted(open_ports, key=lambda x: x["port"])
 
-    def display_results(self, results):
+   
+    def run_scan(self) -> list:
+        """
+        Runs the Nmap scan and returns parsed results.
+
+        Steps:
+            1. Check Nmap is installed
+            2. Build command
+            3. Run via subprocess
+            4. Parse XML output
+            5. Return list of open port dicts
+
+        Returns:
+            List of open port dicts (see _parse_xml for structure)
+            Empty list on failure
+        """
+        if not self._check_nmap():
+            return []
+
+        output_path = self._get_output_path()
+        command     = self._build_command(output_path)
+
+        print(f"{YELLOW}[*] Running: {' '.join(command)}{RESET}\n")
+
+        try:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,  
+                stderr=subprocess.PIPE,      
+                timeout=300,                 
+                text=True,
+            )
+
+            if result.returncode != 0:
+                print(f"{RED}[-] Nmap exited with error code {result.returncode}{RESET}")
+                if result.stderr:
+                    print(f"{RED}{result.stderr.strip()}{RESET}")
+                return []
+
+        except subprocess.TimeoutExpired:
+            print(f"{RED}[-] Scan timed out after 5 minutes{RESET}")
+            return []
+        except Exception as e:
+            print(f"{RED}[-] Unexpected error during scan: {e}{RESET}")
+            return []
+
+        xml_path = f"{output_path}.xml"
+        print(f"\n{CYAN}[*] Raw output saved → {xml_path}{RESET}")
+
+        return self._parse_xml(xml_path)
+
+    def display_results(self, results: list) -> None:
+        """
+        Prints a formatted table of open ports.
+
+        Args:
+            results : list returned by run_scan()
+        """
         if not results:
-            print(f"{RED}[-] no open ports found{RESET}")
+            print(f"{RED}[-] No open ports found{RESET}")
             return
 
-        print(f"\n{GREEN}[+] {len(results)} open port(s) on {self.target}{RESET}\n")
-        print(f"  {CYAN}{'PORT':<14}{'STATE':<8}{'SERVICE':<16}VERSION{RESET}")
-        print(f"  {BLUE}{'─' * 60}{RESET}")
-        for p in results:
+        count = len(results)
+        print(f"\n{GREEN}[+] {count} open port(s) found on {self.target}{RESET}\n")
+
+        # Column headers
+        print(f"  {CYAN}{'PORT':<12}{'PROTOCOL':<10}{'STATE':<8}{'SERVICE':<14}{'VERSION'}{RESET}")
+        print(f"  {BLUE}{'─'*60}{RESET}")
+
+        for entry in results:
+            port     = f"{entry['port']}/{entry['protocol']}"
+            state    = entry["state"]
+            service  = entry["service"]
+            version  = entry["version"]
+
             print(
-                f"  {GREEN}{p['port']}/{p['protocol']:<10}{RESET}"
-                f"{GREEN}{p['state']:<8}{RESET}"
-                f"{CYAN}{p['service']:<16}{RESET}"
-                f"{p['version']}"
+                f"  {GREEN}{port:<12}{RESET}"
+                f"{YELLOW}{entry['protocol']:<10}{RESET}"
+                f"{GREEN}{state:<8}{RESET}"
+                f"{CYAN}{service:<14}{RESET}"
+                f"{version}"
             )
+
         print()
